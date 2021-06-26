@@ -1,4 +1,9 @@
+from datetime import datetime, timedelta
+
 import boto3
+from azure.storage.blob import BlobServiceClient
+from azure.storage.blob import generate_blob_sas, BlobSasPermissions
+from azure.storage.filedatalake import DataLakeServiceClient
 from boto3.s3.transfer import TransferConfig
 from botocore.exceptions import ClientError
 
@@ -16,6 +21,81 @@ S3_LIST_CONFIG = TransferConfig(multipart_threshold=S3_MULTIPART_SIZE, max_concu
                                 multipart_chunksize=S3_MULTIPART_SIZE, use_threads=True)
 
 
+class AdlsStorage:
+    __conn_str = None
+    __adls_client = None
+    __blob_client = None
+    __acc_name = None
+    __acc_key = None
+
+    def __init__(self, acc_name, acc_key, conn_str):
+        self.__conn_str = conn_str
+        self.__adls_client = DataLakeServiceClient(account_url=f"https://{acc_name}.dfs.core.windows.net",
+                                                   credential=acc_key)
+        self.__blob_client = BlobServiceClient.from_connection_string(conn_str)
+        self.__acc_name = acc_name
+        self.__acc_key = acc_key
+
+    def list_containers(self):
+        return [container.name for container in self.__blob_client.list_containers()]
+
+    def create_container(self, container_name):
+        self.__adls_client.create_file_system(file_system=container_name)
+
+    def list_blobs_in_container(self, container_name):
+        _list = self.__adls_client.get_file_system_client(file_system=container_name).get_paths()
+        return [blob.name for blob in _list]
+
+    def upload_file(self, container_name, file_path, key):
+        file_system_client = self.__adls_client.get_file_system_client(file_system=container_name)
+        directory_client = file_system_client.get_directory_client("/")
+        file_client = directory_client.create_file(key)
+        with open(file_path, 'r') as local_file:
+            file_contents = local_file.read()
+        file_client.append_data(data=file_contents, offset=0, length=len(file_contents))
+        file_client.flush_data(len(file_contents))
+
+    def upload_big_file(self, container_name, file_path, key):
+        file_system_client = self.__adls_client.get_file_system_client(file_system=container_name)
+        directory_client = file_system_client.get_directory_client("/")
+        file_client = directory_client.get_file_client(key)
+        with open(file_path, 'r') as local_file:
+            file_contents = local_file.read()
+        file_client.upload_data(file_contents, overwrite=True)
+
+    def download_file(self, container_name, key):
+        file_system_client = self.__adls_client.get_file_system_client(file_system=container_name)
+        directory_client = file_system_client.get_directory_client("/")
+        file_client = directory_client.get_file_client(key)
+        download = file_client.download_file()
+        return download.readall()
+
+    def get_blob_sas(self, container_name: str, key: str, action: str, expire_in_sec: int) -> str:
+        expire_in_hours = int(expire_in_sec / 60 / 60)
+        _read = False
+        _write = False
+        if action == "READ":
+            _read = True
+        elif action == "WRITE":
+            _write = True
+        sas_blob = generate_blob_sas(account_name=self.__acc_name,
+                                     container_name=container_name,
+                                     blob_name=key,
+                                     account_key=self.__acc_key,
+                                     permission=BlobSasPermissions(read=_read, write=_write),
+                                     expiry=datetime.utcnow() + timedelta(hours=expire_in_hours))
+        return f"https://{self.__acc_name}.blob.core.windows.net/{container_name}/{key}?{sas_blob}"
+
+    def check_if_file_exists(self, container_name: str, key: str) -> bool:
+        file_system_client = self.__adls_client.get_file_system_client(file_system=container_name)
+        if file_system_client.get_file_client(key).exists():
+            return True
+        return False
+
+    def put_object(self, container_name, key):
+        pass
+
+
 class S3Storage:
     __client = None
     __region_name = None
@@ -27,7 +107,7 @@ class S3Storage:
                                      region_name=region_name)
 
     def list_buckets(self):
-        return [bucket for bucket in self.__client.list_buckets()["Buckets"]]
+        return [bucket["Name"] for bucket in self.__client.list_buckets()["Buckets"]]
 
     def create_bucket(self, bucket_name):
         self.__client.create_bucket(Bucket=bucket_name,
@@ -36,8 +116,11 @@ class S3Storage:
     def get_object(self, bucket_name, key):
         return self.__client.get_object(Bucket=bucket_name, Key=key).get('Body')
 
-    def list_file_in_bucket(self, bucket_name):
-        return [file_name for file_name in self.__client.list_objects(Bucket=bucket_name)['Contents']]
+    def list_files_in_bucket(self, bucket_name):
+        try:
+            return [file_name for file_name in self.__client.list_objects(Bucket=bucket_name)['Contents']]
+        except KeyError:
+            return []
 
     def upload_file(self, file_path, bucket_name, key):
         self.__client.upload_file(file_path, bucket_name, key)
@@ -73,7 +156,8 @@ class StorageService:
     __s3_obj = None
     __adls_obj = None
 
-    def __init__(self, access_key, secret_key, region_name, cloud_platform):
+    def __init__(self, cloud_platform: str, access_key=None, secret_key=None, region_name=None, acc_name=None,
+                 conn_str=None):
         if cloud_platform not in CHOICES:
             raise ValueError("cloud_platform must any of : " + ",".join(CHOICES))
         self.__platform = cloud_platform
@@ -83,51 +167,67 @@ class StorageService:
         if cloud_platform == "AWS":
             self.__s3_obj = S3Storage(self.__access_key, self.__secret_key, self.__region_name)
         elif cloud_platform == "AZURE":
-            self.__adls_obj = None
+            self.__adls_obj = AdlsStorage(acc_name=acc_name, acc_key=access_key, conn_str=conn_str)
 
     def get_all_boxes(self):
         if self.__s3_obj:
             return self.__s3_obj.list_buckets()
+        elif self.__adls_obj:
+            return self.__adls_obj.list_containers()
 
     def create_box(self, box_name: str) -> None:
         if self.__s3_obj:
             return self.__s3_obj.create_bucket(bucket_name=box_name)
+        elif self.__adls_obj:
+            return self.__adls_obj.create_container(container_name=box_name)
 
     def get_all_records_in_box(self, box_name: str) -> list:
         if self.__s3_obj:
-            return self.__s3_obj.list_file_in_bucket(bucket_name=box_name)
+            return self.__s3_obj.list_files_in_bucket(bucket_name=box_name)
         elif self.__adls_obj:
-            pass
+            return self.__adls_obj.list_blobs_in_container(container_name=box_name)
 
     def post_record_to_box(self, file_path: str, box_name: str, key: str) -> None:
         if self.__s3_obj:
             self.__s3_obj.upload_file(file_path, box_name, key)
         elif self.__adls_obj:
-            pass
+            self.__adls_obj.upload_file(box_name, file_path, key)
 
     def post_big_csv_record_to_box_with_configs(self, file_path: str, box_name: str,
-                                                key: str, configs: TransferConfig=S3_LIST_CONFIG):
+                                                key: str, configs: TransferConfig = S3_LIST_CONFIG):
         if self.__s3_obj:
             self.__s3_obj.upload_big_csv_with_configs(file_path, box_name, key, configs)
+        elif self.__adls_obj:
+            self.__adls_obj.upload_big_file(box_name, file_path, key)
 
     def check_record_exists(self, box_name: str, key: str) -> bool:
         if self.__s3_obj:
             return self.__s3_obj.check_if_file_exists(bucket_name=box_name, key=key)
+        elif self.__adls_obj:
+            return self.__adls_obj.check_if_file_exists(container_name=box_name, key=key)
 
     def get_signatured_record_url(self, key: str, box_name: str, expire_in=7200, action: str = "READ") -> str:
         if action not in PRESIGNED_URL_METHODS:
             raise ValueError("action must be in :" + ",".join(PRESIGNED_URL_METHODS.keys()))
         if self.__s3_obj:
             return self.__s3_obj.generate_presigned_url(box_name, key, action, expire_in)
+        elif self.__adls_obj:
+            return self.__adls_obj.get_blob_sas(box_name, key, action, expire_in)
 
     def get_record_from_box(self, box_name: str, key: str):
         if self.__s3_obj:
             return self.__s3_obj.get_object(bucket_name=box_name, key=key)
+        elif self.__adls_obj:
+            return self.__adls_obj.download_file(container_name=box_name, key=key)
 
     def get_records_from_dir(self, box_name, key):
         if self.__s3_obj:
             return self.__s3_obj.get_files_from_directory(box_name, key)
+        elif self.__adls_obj:
+            return self.__adls_obj.list_blobs_in_container(box_name)
 
     def put_record_in_box(self, box_name, key, configs):
         if self.__s3_obj:
             return self.__s3_obj.put_object(box_name, key, configs)
+        elif self.__adls_obj:
+            pass
