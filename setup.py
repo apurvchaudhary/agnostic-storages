@@ -3,7 +3,7 @@ from setuptools import setup, find_packages
 
 HERE = pathlib.Path(__file__).parent
 
-VERSION = "0.2"
+VERSION = "1.0"
 PACKAGE_NAME = "agno_storage"
 AUTHOR = "Apurv Chaudhary"
 AUTHOR_EMAIL = "apurv.sirohi@gmail.com"

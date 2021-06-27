@@ -19,6 +19,10 @@ FOR AZURE:
     AGNOSTIC_STORAGE_AZURE_ACCOUNT_NAME = "****" (azure storage account name)
     AGNOSTIC_STORAGE_AZURE_ACCESS_KEY = "****" (azure storage access key)
     AGNOSTIC_STORAGE_AZURE_CONNECTION_STR = "****" (azure storage connection string)
+As of right now this library is supporting following cloud Storage:
+    1. AWS S3
+    2. Azure ADLS
+Note : Kindly fork and contribute for future release!!!
 """
 from datetime import datetime, timedelta
 
@@ -31,6 +35,7 @@ from botocore.exceptions import ClientError
 from django.conf import settings
 
 CHOICES = ["AWS", "AZURE"]
+
 try:
     AGNOSTIC_STORAGE_CLOUD_PLATFORM = settings.AGNOSTIC_STORAGE_CLOUD_PLATFORM
 except AttributeError:
@@ -43,14 +48,17 @@ if AGNOSTIC_STORAGE_CLOUD_PLATFORM == CHOICES[0]:
     AGNOSTIC_STORAGE_AWS_ACCESS_KEY = settings.AGNOSTIC_STORAGE_AWS_ACCESS_KEY
     AGNOSTIC_STORAGE_AWS_SECRET_KEY = settings.AGNOSTIC_STORAGE_AWS_SECRET_KEY
     AGNOSTIC_STORAGE_AWS_REGION = settings.AGNOSTIC_STORAGE_AWS_REGION
-    if not AGNOSTIC_STORAGE_AWS_ACCESS_KEY or AGNOSTIC_STORAGE_AWS_SECRET_KEY or AGNOSTIC_STORAGE_AWS_REGION:
+    if not (AGNOSTIC_STORAGE_AWS_ACCESS_KEY
+            and AGNOSTIC_STORAGE_AWS_SECRET_KEY
+            and AGNOSTIC_STORAGE_AWS_REGION):
         raise ValueError("cloud agnostic storage AWS keys settings can't be empty")
 elif AGNOSTIC_STORAGE_CLOUD_PLATFORM == CHOICES[1]:
     AGNOSTIC_STORAGE_AZURE_ACCOUNT_NAME = settings.AGNOSTIC_STORAGE_AZURE_ACCOUNT_NAME
     AGNOSTIC_STORAGE_AZURE_ACCESS_KEY = settings.AGNOSTIC_STORAGE_AZURE_ACCESS_KEY
     AGNOSTIC_STORAGE_AZURE_CONNECTION_STR = settings.AGNOSTIC_STORAGE_AZURE_CONNECTION_STR
-    if not AGNOSTIC_STORAGE_AZURE_ACCOUNT_NAME or AGNOSTIC_STORAGE_AZURE_ACCESS_KEY or \
-            AGNOSTIC_STORAGE_AZURE_CONNECTION_STR:
+    if not (AGNOSTIC_STORAGE_AZURE_ACCOUNT_NAME
+            and AGNOSTIC_STORAGE_AZURE_ACCESS_KEY
+            and AGNOSTIC_STORAGE_AZURE_CONNECTION_STR):
         raise ValueError("cloud agnostic storage AZURE keys settings can't be empty")
 
 PRESIGNED_URL_METHODS = {
@@ -60,7 +68,7 @@ PRESIGNED_URL_METHODS = {
 
 # size is in GB
 S3_MULTIPART_SIZE = 1024 ** 3
-# any file more than 1GB will be broken into multi parts and send concurrently
+# any file more than 1GB will be broken into multi parts and send concurrently in chunks
 S3_LIST_CONFIG = TransferConfig(multipart_threshold=S3_MULTIPART_SIZE, multipart_chunksize=S3_MULTIPART_SIZE)
 
 
@@ -110,8 +118,7 @@ class _AdlsStorage:
         file_system_client = self.__adls_client.get_file_system_client(file_system=container_name)
         directory_client = file_system_client.get_directory_client("/")
         file_client = directory_client.get_file_client(key)
-        download = file_client.download_file()
-        return download.readall()
+        return file_client.download_file()
 
     def get_blob_sas(self, container_name: str, key: str, action: str, expire_in_sec: int) -> str:
         expire_in_hours = int(expire_in_sec / 60 / 60)
