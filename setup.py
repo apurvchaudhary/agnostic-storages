@@ -3,7 +3,7 @@ from setuptools import setup, find_packages
 
 HERE = pathlib.Path(__file__).parent
 
-VERSION = "0.1"
+VERSION = "0.2"
 PACKAGE_NAME = "agno_storage"
 AUTHOR = "Apurv Chaudhary"
 AUTHOR_EMAIL = "apurv.sirohi@gmail.com"
@@ -17,6 +17,7 @@ LONG_DESC_TYPE = "text/markdown"
 INSTALL_REQUIRES = [
       "boto3",
       "azure-storage-file-datalake",
+      "django",
 ]
 
 setup(name=PACKAGE_NAME,

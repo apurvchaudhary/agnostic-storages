@@ -1,3 +1,25 @@
+"""
+cloud agnostic storage service class which gives methods to integrate your file storage to multiple cloud support
+How to use eg:
+    1.display all boxes your storage contains i.e (buckets in S3/containers in Azure ADLS)
+        use obj.get_all_boxes() # will return list of boxes i.e (buckets in S3/containers in Azure ADLS)
+    2.create box in your storage
+        use obj.create_box() # will create box in your storage i.e (buckets in S3/containers in Azure ADLS)
+Add keys to your settings.py
+
+AGNOSTIC_STORAGE_CLOUD_PLATFORM : any of ["AWS", "AZURE",]
+
+Add cloud specific keys to your settings.py
+
+FOR AWS:
+    AGNOSTIC_STORAGE_AWS_ACCESS_KEY = "****" (aws s3 access key)
+    AGNOSTIC_STORAGE_AWS_SECRET_KEY = "****" (aws s3 secret key)
+    AGNOSTIC_STORAGE_AWS_REGION = "****" (aws s3 region)
+FOR AZURE:
+    AGNOSTIC_STORAGE_AZURE_ACCOUNT_NAME = "****" (azure storage account name)
+    AGNOSTIC_STORAGE_AZURE_ACCESS_KEY = "****" (azure storage access key)
+    AGNOSTIC_STORAGE_AZURE_CONNECTION_STR = "****" (azure storage connection string)
+"""
 from datetime import datetime, timedelta
 
 import boto3
@@ -27,7 +49,8 @@ elif AGNOSTIC_STORAGE_CLOUD_PLATFORM == CHOICES[1]:
     AGNOSTIC_STORAGE_AZURE_ACCOUNT_NAME = settings.AGNOSTIC_STORAGE_AZURE_ACCOUNT_NAME
     AGNOSTIC_STORAGE_AZURE_ACCESS_KEY = settings.AGNOSTIC_STORAGE_AZURE_ACCESS_KEY
     AGNOSTIC_STORAGE_AZURE_CONNECTION_STR = settings.AGNOSTIC_STORAGE_AZURE_CONNECTION_STR
-    if not AGNOSTIC_STORAGE_AZURE_ACCOUNT_NAME or AGNOSTIC_STORAGE_AZURE_ACCESS_KEY or AGNOSTIC_STORAGE_AZURE_CONNECTION_STR:
+    if not AGNOSTIC_STORAGE_AZURE_ACCOUNT_NAME or AGNOSTIC_STORAGE_AZURE_ACCESS_KEY or \
+            AGNOSTIC_STORAGE_AZURE_CONNECTION_STR:
         raise ValueError("cloud agnostic storage AZURE keys settings can't be empty")
 
 PRESIGNED_URL_METHODS = {
@@ -38,8 +61,7 @@ PRESIGNED_URL_METHODS = {
 # size is in GB
 S3_MULTIPART_SIZE = 1024 ** 3
 # any file more than 1GB will be broken into multi parts and send concurrently
-S3_LIST_CONFIG = TransferConfig(multipart_threshold=S3_MULTIPART_SIZE, max_concurrency=10,
-                                multipart_chunksize=S3_MULTIPART_SIZE, use_threads=True)
+S3_LIST_CONFIG = TransferConfig(multipart_threshold=S3_MULTIPART_SIZE, multipart_chunksize=S3_MULTIPART_SIZE)
 
 
 class _AdlsStorage:
@@ -155,8 +177,10 @@ class _S3Storage:
                                                     ExpiresIn=expires_in)
 
     def get_files_from_directory(self, bucket_name, key):
-        return self.__client.list_objects_v2(Bucket=bucket_name, Prefix=key,
-                                             Delimiter='/').get('Contents', [])
+        try:
+            return self.__client.list_objects_v2(Bucket=bucket_name, Prefix=key, Delimiter='/').get('Contents', [])
+        except KeyError:
+            return []
 
     def check_if_file_exists(self, bucket_name, key):
         try:
@@ -170,64 +194,127 @@ class _S3Storage:
 
 
 class StorageService:
-    __access_key = None
-    __secret_key = None
-    __region_name = None
-    __platform = None
+    """
+    cloud agnostic storage service class which gives methods to integrate your file storage to multiple cloud support
+    How to use eg:
+        1.display all boxes your storage contains i.e (buckets in S3/containers in Azure ADLS)
+            use obj.get_all_boxes() # will return list of boxes i.e (buckets in S3/containers in Azure ADLS)
+        2.create box in your storage
+            use obj.create_box() # will create box in your storage i.e (buckets in S3/containers in Azure ADLS)
+    Add keys to your settings.py
+
+    AGNOSTIC_STORAGE_CLOUD_PLATFORM : any of ["AWS", "AZURE",]
+
+    Add cloud specific keys to your settings.py
+
+    FOR AWS:
+        AGNOSTIC_STORAGE_AWS_ACCESS_KEY = "****" (aws s3 access key)
+        AGNOSTIC_STORAGE_AWS_SECRET_KEY = "****" (aws s3 secret key)
+        AGNOSTIC_STORAGE_AWS_REGION = "****" (aws s3 region)
+    FOR AZURE:
+        AGNOSTIC_STORAGE_AZURE_ACCOUNT_NAME = "****" (azure storage account name)
+        AGNOSTIC_STORAGE_AZURE_ACCESS_KEY = "****" (azure storage access key)
+        AGNOSTIC_STORAGE_AZURE_CONNECTION_STR = "****" (azure storage connection string)
+    """
     __s3_obj = None
     __adls_obj = None
 
-    def __init__(self, cloud_platform: str, access_key=None, secret_key=None, region_name=None, acc_name=None,
-                 conn_str=None):
-        if cloud_platform not in CHOICES:
+    def __init__(self):
+        if AGNOSTIC_STORAGE_CLOUD_PLATFORM not in CHOICES:
             raise ValueError("cloud_platform must any of : " + ",".join(CHOICES))
-        self.__platform = cloud_platform
-        self.__access_key = access_key
-        self.__secret_key = secret_key
-        self.__region_name = region_name
-        if cloud_platform == "AWS":
-            self.__s3_obj = _S3Storage(self.__access_key, self.__secret_key, self.__region_name)
-        elif cloud_platform == "AZURE":
-            self.__adls_obj = _AdlsStorage(acc_name=acc_name, acc_key=access_key, conn_str=conn_str)
+        elif AGNOSTIC_STORAGE_CLOUD_PLATFORM == "AWS":
+            self.__s3_obj = _S3Storage(AGNOSTIC_STORAGE_AWS_ACCESS_KEY,
+                                       AGNOSTIC_STORAGE_AWS_SECRET_KEY,
+                                       AGNOSTIC_STORAGE_AWS_REGION)
+        elif AGNOSTIC_STORAGE_CLOUD_PLATFORM == "AZURE":
+            self.__adls_obj = _AdlsStorage(AGNOSTIC_STORAGE_AZURE_ACCOUNT_NAME,
+                                           AGNOSTIC_STORAGE_AZURE_ACCESS_KEY,
+                                           AGNOSTIC_STORAGE_AZURE_CONNECTION_STR)
+        else:
+            # for future release (support for more clouds)
+            pass
 
-    def get_all_boxes(self):
+    def get_all_boxes(self) -> list:
+        """
+        method to return all boxes in storage
+        :return: list
+        """
         if self.__s3_obj:
             return self.__s3_obj.list_buckets()
         elif self.__adls_obj:
             return self.__adls_obj.list_containers()
 
     def create_box(self, box_name: str) -> None:
+        """
+        method to create box in storage
+        :param box_name: unique throughout cloud
+        :return: None
+        """
         if self.__s3_obj:
             return self.__s3_obj.create_bucket(bucket_name=box_name)
         elif self.__adls_obj:
             return self.__adls_obj.create_container(container_name=box_name)
 
     def get_all_records_in_box(self, box_name: str) -> list:
+        """
+        method to get all records in box
+        :param box_name: str
+        :return: list
+        """
         if self.__s3_obj:
             return self.__s3_obj.list_files_in_bucket(bucket_name=box_name)
         elif self.__adls_obj:
             return self.__adls_obj.list_blobs_in_container(container_name=box_name)
 
     def post_record_to_box(self, file_path: str, box_name: str, key: str) -> None:
+        """
+        method to upload record to box
+        :param file_path: local file path str
+        :param box_name: box name str
+        :param key: file name str
+        :return: None
+        """
         if self.__s3_obj:
             self.__s3_obj.upload_file(file_path, box_name, key)
         elif self.__adls_obj:
             self.__adls_obj.upload_file(box_name, file_path, key)
 
     def post_big_csv_record_to_box_with_configs(self, file_path: str, box_name: str,
-                                                key: str, configs: TransferConfig = S3_LIST_CONFIG):
+                                                key: str, configs: TransferConfig = S3_LIST_CONFIG) -> None:
+        """
+        method to create big csv record with configs of concurrency
+        :param file_path: local file path str
+        :param box_name: box name str
+        :param key: file name str
+        :param configs: TransferConfig (default=1gb in concurrency)
+        :return: None
+        """
         if self.__s3_obj:
             self.__s3_obj.upload_big_csv_with_configs(file_path, box_name, key, configs)
         elif self.__adls_obj:
             self.__adls_obj.upload_big_file(box_name, file_path, key)
 
     def check_record_exists(self, box_name: str, key: str) -> bool:
+        """
+        method to check if record exists in box
+        :param box_name: box name str
+        :param key: file name str
+        :return: bool
+        """
         if self.__s3_obj:
             return self.__s3_obj.check_if_file_exists(bucket_name=box_name, key=key)
         elif self.__adls_obj:
             return self.__adls_obj.check_if_file_exists(container_name=box_name, key=key)
 
-    def get_signatured_record_url(self, key: str, box_name: str, expire_in=7200, action: str = "READ") -> str:
+    def get_signatured_record_url(self, key: str, box_name: str, expire_in: int = 7200, action: str = "READ") -> str:
+        """
+        method to get signatured url for record with expiry time setter
+        :param key: file name str
+        :param box_name: box name str
+        :param expire_in: default is 7200 i.e (2 hours)
+        :param action: "READ" or "WRITE" default="READ"
+        :return: url str
+        """
         if action not in PRESIGNED_URL_METHODS:
             raise ValueError("action must be in :" + ",".join(PRESIGNED_URL_METHODS.keys()))
         if self.__s3_obj:
@@ -236,18 +323,37 @@ class StorageService:
             return self.__adls_obj.get_blob_sas(box_name, key, action, expire_in)
 
     def get_record_from_box(self, box_name: str, key: str):
+        """
+        method to get record from box
+        :param box_name: box name str
+        :param key: file name str
+        :return: file
+        """
         if self.__s3_obj:
             return self.__s3_obj.get_object(bucket_name=box_name, key=key)
         elif self.__adls_obj:
             return self.__adls_obj.download_file(container_name=box_name, key=key)
 
-    def get_records_from_dir(self, box_name, key):
+    def get_records_from_dir(self, box_name, key) -> list:
+        """
+        method to get directory level records (all records in a directory)
+        :param box_name: box name str
+        :param key: file name str
+        :return: list
+        """
         if self.__s3_obj:
             return self.__s3_obj.get_files_from_directory(box_name, key)
         elif self.__adls_obj:
             return self.__adls_obj.list_blobs_in_container(box_name)
 
-    def put_record_in_box(self, box_name, key, configs):
+    def put_record_in_box(self, box_name, key, configs) -> None:
+        """
+        method to update data in record
+        :param box_name: box name str
+        :param key: file name str
+        :param configs: configs to update
+        :return: None
+        """
         if self.__s3_obj:
             return self.__s3_obj.put_object(box_name, key, configs)
         elif self.__adls_obj:
