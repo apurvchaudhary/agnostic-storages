@@ -6,8 +6,29 @@ from azure.storage.blob import generate_blob_sas, BlobSasPermissions
 from azure.storage.filedatalake import DataLakeServiceClient
 from boto3.s3.transfer import TransferConfig
 from botocore.exceptions import ClientError
+from django.conf import settings
 
 CHOICES = ["AWS", "AZURE"]
+try:
+    AGNOSTIC_STORAGE_CLOUD_PLATFORM = settings.AGNOSTIC_STORAGE_CLOUD_PLATFORM
+except AttributeError:
+    raise AttributeError(
+        f"set AGNOSTIC_STORAGE_CLOUD_PLATFORM key in your settings.py to either str : {', '.join(CHOICES)}")
+if AGNOSTIC_STORAGE_CLOUD_PLATFORM not in CHOICES:
+    raise ValueError("AGNOSTIC_STORAGE_CLOUD_PLATFORM must any of str : " + ", ".join(CHOICES))
+
+if AGNOSTIC_STORAGE_CLOUD_PLATFORM == CHOICES[0]:
+    AGNOSTIC_STORAGE_AWS_ACCESS_KEY = settings.AGNOSTIC_STORAGE_AWS_ACCESS_KEY
+    AGNOSTIC_STORAGE_AWS_SECRET_KEY = settings.AGNOSTIC_STORAGE_AWS_SECRET_KEY
+    AGNOSTIC_STORAGE_AWS_REGION = settings.AGNOSTIC_STORAGE_AWS_REGION
+    if not AGNOSTIC_STORAGE_AWS_ACCESS_KEY or AGNOSTIC_STORAGE_AWS_SECRET_KEY or AGNOSTIC_STORAGE_AWS_REGION:
+        raise ValueError("cloud agnostic storage AWS keys settings can't be empty")
+elif AGNOSTIC_STORAGE_CLOUD_PLATFORM == CHOICES[1]:
+    AGNOSTIC_STORAGE_AZURE_ACCOUNT_NAME = settings.AGNOSTIC_STORAGE_AZURE_ACCOUNT_NAME
+    AGNOSTIC_STORAGE_AZURE_ACCESS_KEY = settings.AGNOSTIC_STORAGE_AZURE_ACCESS_KEY
+    AGNOSTIC_STORAGE_AZURE_CONNECTION_STR = settings.AGNOSTIC_STORAGE_AZURE_CONNECTION_STR
+    if not AGNOSTIC_STORAGE_AZURE_ACCOUNT_NAME or AGNOSTIC_STORAGE_AZURE_ACCESS_KEY or AGNOSTIC_STORAGE_AZURE_CONNECTION_STR:
+        raise ValueError("cloud agnostic storage AZURE keys settings can't be empty")
 
 PRESIGNED_URL_METHODS = {
     "READ": "get_object",
@@ -21,7 +42,7 @@ S3_LIST_CONFIG = TransferConfig(multipart_threshold=S3_MULTIPART_SIZE, max_concu
                                 multipart_chunksize=S3_MULTIPART_SIZE, use_threads=True)
 
 
-class AdlsStorage:
+class _AdlsStorage:
     __conn_str = None
     __adls_client = None
     __blob_client = None
@@ -96,7 +117,7 @@ class AdlsStorage:
         pass
 
 
-class S3Storage:
+class _S3Storage:
     __client = None
     __region_name = None
 
@@ -165,9 +186,9 @@ class StorageService:
         self.__secret_key = secret_key
         self.__region_name = region_name
         if cloud_platform == "AWS":
-            self.__s3_obj = S3Storage(self.__access_key, self.__secret_key, self.__region_name)
+            self.__s3_obj = _S3Storage(self.__access_key, self.__secret_key, self.__region_name)
         elif cloud_platform == "AZURE":
-            self.__adls_obj = AdlsStorage(acc_name=acc_name, acc_key=access_key, conn_str=conn_str)
+            self.__adls_obj = _AdlsStorage(acc_name=acc_name, acc_key=access_key, conn_str=conn_str)
 
     def get_all_boxes(self):
         if self.__s3_obj:
